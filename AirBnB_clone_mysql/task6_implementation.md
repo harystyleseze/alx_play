@@ -1,9 +1,196 @@
+To implement the necessary changes to meet all the task requirements, we need to modify both `file_storage.py` and `console.py` to handle two different storage engines: file storage and MySQL storage. This involves updating the `FileStorage` class and adding a `DBStorage` class, as well as modifying the console to work with the chosen storage engine based on environment variables.
+
+### Step-by-Step Implementation
+
+#### 1. Create the `DBStorage` class
+
+This class will handle interactions with the MySQL database.
+
+```python
+# db_storage.py
+#!/usr/bin/python3
+"""This module defines a class to manage database storage for hbnb clone"""
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker, scoped_session
+from models.base_model import Base
+
+class DBStorage:
+    """This class manages storage of hbnb models in MySQL database"""
+    __engine = None
+    __session = None
+
+    def __init__(self):
+        """Instantiates a new DBStorage object"""
+        from os import getenv
+        HBNB_MYSQL_USER = getenv('HBNB_MYSQL_USER')
+        HBNB_MYSQL_PWD = getenv('HBNB_MYSQL_PWD')
+        HBNB_MYSQL_HOST = getenv('HBNB_MYSQL_HOST')
+        HBNB_MYSQL_DB = getenv('HBNB_MYSQL_DB')
+        HBNB_ENV = getenv('HBNB_ENV')
+
+        self.__engine = create_engine(f'mysql+mysqldb://{HBNB_MYSQL_USER}:{HBNB_MYSQL_PWD}@{HBNB_MYSQL_HOST}/{HBNB_MYSQL_DB}', pool_pre_ping=True)
+
+        if HBNB_ENV == "test":
+            Base.metadata.drop_all(self.__engine)
+
+    def all(self, cls=None):
+        """Returns a dictionary of models currently in database"""
+        from models.user import User
+        from models.place import Place
+        from models.state import State
+        from models.city import City
+        from models.amenity import Amenity
+        from models.review import Review
+
+        if cls is None:
+            classes = [User, Place, State, City, Amenity, Review]
+        else:
+            classes = [cls]
+
+        objects = {}
+        for cls in classes:
+            query = self.__session.query(cls)
+            for obj in query.all():
+                key = obj.__class__.__name__ + '.' + obj.id
+                objects[key] = obj
+
+        return objects
+
+    def new(self, obj):
+        """Add the object to the current database session"""
+        self.__session.add(obj)
+
+    def save(self):
+        """Commit all changes of the current database session"""
+        self.__session.commit()
+
+    def delete(self, obj=None):
+        """Delete from the current database session obj if not None"""
+        if obj is not None:
+            self.__session.delete(obj)
+
+    def reload(self):
+        """Reloads data from the database"""
+        from models.base_model import Base
+        from models.user import User
+        from models.place import Place
+        from models.state import State
+        from models.city import City
+        from models.amenity import Amenity
+        from models.review import Review
+
+        Base.metadata.create_all(self.__engine)
+        session_factory = sessionmaker(bind=self.__engine, expire_on_commit=False)
+        Session = scoped_session(session_factory)
+        self.__session = Session()
+```
+
+#### 2. Modify the `__init__.py` file
+
+Update the `__init__.py` to switch between `FileStorage` and `DBStorage` based on an environment variable.
+
+```python
+# __init__.py
+#!/usr/bin/python3
+"""This module instantiates a storage object"""
+from os import getenv
+
+storage_type = getenv('HBNB_TYPE_STORAGE')
+
+if storage_type == 'db':
+    from models.engine.db_storage import DBStorage
+    storage = DBStorage()
+else:
+    from models.engine.file_storage import FileStorage
+    storage = FileStorage()
+
+storage.reload()
+```
+
+#### 3. Update `file_storage.py` with imports and docstrings
+
+Ensure your `file_storage.py` is up-to-date with necessary imports and docstrings for documentation purposes.
+
+```python
+# file_storage.py
+#!/usr/bin/python3
+"""This module defines a class to manage file storage for hbnb clone"""
+import json
+
+class FileStorage:
+    """This class manages storage of hbnb models in JSON format"""
+    __file_path = 'file.json'
+    __objects = {}
+
+    def all(self, cls=None):
+        """Returns a dictionary of models currently in storage"""
+        if cls is None:
+            return FileStorage.__objects
+        else:
+            filtered_objects = {}
+            for key, value in FileStorage.__objects.items():
+                if isinstance(value, cls):
+                    filtered_objects[key] = value
+            return filtered_objects
+
+    def new(self, obj):
+        """Adds new object to storage dictionary"""
+        self.all().update({obj.to_dict()['__class__'] + '.' + obj.id: obj})
+
+    def save(self):
+        """Saves storage dictionary to file"""
+        with open(FileStorage.__file_path, 'w') as f:
+            temp = {}
+            temp.update(FileStorage.__objects)
+            for key, val in temp.items():
+                temp[key] = val.to_dict()
+            json.dump(temp, f)
+
+    def reload(self):
+        """Loads storage dictionary from file"""
+        from models.base_model import BaseModel
+        from models.user import User
+        from models.place import Place
+        from models.state import State
+        from models.city import City
+        from models.amenity import Amenity
+        from models.review import Review
+
+        classes = {
+                    'BaseModel': BaseModel, 'User': User, 'Place': Place,
+                    'State': State, 'City': City, 'Amenity': Amenity,
+                    'Review': Review
+                  }
+        try:
+            temp = {}
+            with open(FileStorage.__file_path, 'r') as f:
+                temp = json.load(f)
+                for key, val in temp.items():
+                    self.all()[key] = classes[val['__class__']](**val)
+        except FileNotFoundError:
+            pass
+
+    def delete(self, obj=None):
+        """Deletes obj from __objects if it's inside"""
+        if obj is None:
+            return
+        key = obj.__class__.__name__ + '.' + obj.id
+        if key in FileStorage.__objects:
+            del FileStorage.__objects[key]
+```
+
+#### 4. Update the `console.py` file
+
+Modify the `console.py` to be compatible with the changes in storage.
+
+```python
+# console.py
 #!/usr/bin/python3
 """ Console Module """
 import cmd
 import sys
-from models.base_model import BaseModel
 from models.__init__ import storage
+from models.base_model import BaseModel
 from models.user import User
 from models.place import Place
 from models.state import State
@@ -80,7 +267,9 @@ class HBNBCommand(cmd.Cmd):
         return stop
 
     def do_quit(self, command):
-        """ Method to exit the HBNB console"""
+       
+
+ """ Method to exit the HBNB console"""
         exit()
 
     def help_quit(self):
@@ -322,4 +511,17 @@ class HBNBCommand(cmd.Cmd):
 
 if __name__ == "__main__":
     HBNBCommand().cmdloop()
+```
 
+### Environment Variables
+
+To switch between file storage and MySQL storage, set the following environment variables:
+
+- `HBNB_TYPE_STORAGE`: Set to `db` for MySQL storage, otherwise file storage will be used.
+- `HBNB_MYSQL_USER`: MySQL username
+- `HBNB_MYSQL_PWD`: MySQL password
+- `HBNB_MYSQL_HOST`: MySQL host
+- `HBNB_MYSQL_DB`: MySQL database name
+- `HBNB_ENV`: Set to `test` if running in a test environment (this will drop all tables before creating them).
+
+By following these steps, you will be able to meet all the task requirements for handling two different storage engines (file storage and MySQL storage) and modifying the console to work with the chosen storage engine based on environment variables.
